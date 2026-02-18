@@ -108,6 +108,31 @@ emqx_schema_validation_http_api {
   example_metrics.label:
   """Metrics Example"""
 
+  get_topic_data_model.desc:
+  """Get the topic data model configuration."""
+  get_topic_data_model.label:
+  """Get Topic Data Model"""
+
+  update_topic_data_model.desc:
+  """Update the topic data model configuration."""
+  update_topic_data_model.label:
+  """Update Topic Data Model"""
+
+  delete_topic_data_model.desc:
+  """Delete the topic data model configuration."""
+  delete_topic_data_model.label:
+  """Delete Topic Data Model"""
+
+  topic_data_model_not_found.desc:
+  """Topic data model not configured."""
+  topic_data_model_not_found.label:
+  """Topic Data Model Not Found"""
+
+  example_topic_data_model.desc:
+  """Example topic data model with a device tree."""
+  example_topic_data_model.label:
+  """Topic Data Model Example"""
+
 append_validation.label:
 """Append Validation"""
 

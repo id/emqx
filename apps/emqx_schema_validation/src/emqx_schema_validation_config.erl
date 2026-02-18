@@ -18,13 +18,20 @@
     lookup/1,
     insert/1,
     update/1,
-    delete/1
+    delete/1,
+
+    get_topic_tree/0,
+    get_topic_data_model/0,
+    update_topic_data_model/1,
+    delete_topic_data_model/0
 ]).
 
 %% `emqx_config_handler' API
 -export([pre_config_update/3, post_config_update/5]).
 
 %% `emqx_config_backup' API
+-include_lib("emqx/include/logger.hrl").
+
 -behaviour(emqx_config_backup).
 -export([import_config/2, config_dependencies/0]).
 
@@ -63,7 +70,8 @@ load() ->
             ok = emqx_schema_validation_registry:insert(Pos, Validation)
         end,
         lists:enumerate(Validations)
-    ).
+    ),
+    maybe_load_topic_tree().
 
 unload() ->
     Validations = emqx:get_config(?VALIDATIONS_CONF_PATH, []),
@@ -72,7 +80,11 @@ unload() ->
             ok = emqx_schema_validation_registry:delete(Validation, Pos)
         end,
         lists:enumerate(Validations)
-    ).
+    ),
+    persistent_term:erase({?MODULE, topic_tree}).
+
+get_topic_tree() ->
+    persistent_term:get({?MODULE, topic_tree}, undefined).
 
 -spec list() -> [validation()].
 list() ->
@@ -116,6 +128,23 @@ delete(Name) ->
     emqx_conf:update(
         ?VALIDATIONS_CONF_PATH,
         {delete, Name},
+        #{override_to => cluster}
+    ).
+
+get_topic_data_model() ->
+    emqx:get_config([?CONF_ROOT, topic_data_model], undefined).
+
+update_topic_data_model(NewModel) ->
+    emqx_conf:update(
+        [?CONF_ROOT],
+        {merge, #{<<"topic_data_model">> => NewModel}},
+        #{override_to => cluster}
+    ).
+
+delete_topic_data_model() ->
+    emqx_conf:update(
+        [?CONF_ROOT],
+        {merge, #{<<"topic_data_model">> => #{}}},
         #{override_to => cluster}
     ).
 
@@ -166,6 +195,7 @@ post_config_update(?VALIDATIONS_CONF_PATH, {reorder, _Order}, New, Old, _AppEnvs
     ok = emqx_schema_validation_registry:reindex_positions(New, Old),
     ok;
 post_config_update([?CONF_ROOT], {merge, _}, ResultingConfig, Old, _AppEnvs) ->
+    maybe_reload_topic_tree(ResultingConfig, Old),
     #{validations := ResultingValidations} = ResultingConfig,
     #{validations := OldValidations} = Old,
     #{added := NewValidations0} =
@@ -188,6 +218,7 @@ post_config_update([?CONF_ROOT], {merge, _}, ResultingConfig, Old, _AppEnvs) ->
         {ok, #{new_validations => NewValidations}}
     end;
 post_config_update([?CONF_ROOT], {replace, Input}, ResultingConfig, Old, _AppEnvs) ->
+    maybe_reload_topic_tree(ResultingConfig, Old),
     #{
         new_validations := NewValidations,
         changed_validations := ChangedValidations0,
@@ -486,3 +517,52 @@ multi_assert_referenced_schemas_exist(Validations) ->
             [Check || #{checks := Checks} <- Validations, Check <- Checks]
         ),
     do_assert_referenced_schemas_exist(SchemasToCheck).
+
+maybe_load_topic_tree() ->
+    case emqx:get_config([?CONF_ROOT, topic_data_model], undefined) of
+        DataModel when is_map(DataModel), map_size(DataModel) > 0 ->
+            case emqx_schema_validation_topic_tree:compile(DataModel) of
+                {ok, Tree} ->
+                    persistent_term:put({?MODULE, topic_tree}, Tree);
+                {error, Reason} ->
+                    ?SLOG(error, #{
+                        msg => "failed_to_compile_topic_data_model",
+                        reason => Reason
+                    }),
+                    persistent_term:erase({?MODULE, topic_tree}),
+                    error({failed_to_compile_topic_data_model, Reason})
+            end;
+        _ ->
+            maybe_load_topic_tree_from_file()
+    end.
+
+maybe_load_topic_tree_from_file() ->
+    case emqx:get_config([?CONF_ROOT, topic_data_model_file], undefined) of
+        undefined ->
+            persistent_term:erase({?MODULE, topic_tree});
+        Filename ->
+            case emqx_schema_validation_topic_tree:load(Filename) of
+                {ok, Tree} ->
+                    persistent_term:put({?MODULE, topic_tree}, Tree);
+                {error, Reason} ->
+                    ?SLOG(error, #{
+                        msg => "failed_to_load_topic_data_model",
+                        file => Filename,
+                        reason => Reason
+                    }),
+                    persistent_term:erase({?MODULE, topic_tree}),
+                    error({failed_to_load_topic_data_model, Reason})
+            end
+    end.
+
+maybe_reload_topic_tree(NewConf, OldConf) ->
+    NewModel = maps:get(topic_data_model, NewConf, undefined),
+    OldModel = maps:get(topic_data_model, OldConf, undefined),
+    NewFile = maps:get(topic_data_model_file, NewConf, undefined),
+    OldFile = maps:get(topic_data_model_file, OldConf, undefined),
+    case NewModel =/= OldModel orelse NewFile =/= OldFile of
+        true ->
+            maybe_load_topic_tree();
+        false ->
+            ok
+    end.

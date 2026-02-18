@@ -17,7 +17,11 @@
     lookup/1,
     insert/1,
     update/1,
-    delete/1
+    delete/1,
+
+    get_topic_data_model/0,
+    update_topic_data_model/1,
+    delete_topic_data_model/0
 ]).
 
 %% `emqx_hooks' API
@@ -101,6 +105,15 @@ update(Validation) ->
 delete(Name) ->
     emqx_schema_validation_config:delete(Name).
 
+get_topic_data_model() ->
+    emqx_schema_validation_config:get_topic_data_model().
+
+update_topic_data_model(Model) ->
+    emqx_schema_validation_config:update_topic_data_model(Model).
+
+delete_topic_data_model() ->
+    emqx_schema_validation_config:delete_topic_data_model().
+
 %%------------------------------------------------------------------------------
 %% Hooks
 %%------------------------------------------------------------------------------
@@ -116,26 +129,41 @@ unregister_hooks() ->
 -spec on_message_publish(emqx_types:message()) ->
     {ok, emqx_types:message()} | {stop, emqx_types:message()}.
 on_message_publish(Message = #message{topic = Topic, headers = Headers}) ->
-    case emqx_schema_validation_registry:matching_validations(Topic) of
-        [] ->
-            ok;
-        Validations ->
-            case run_validations(Validations, Message) of
-                ok ->
-                    emqx_metrics:inc_global('messages.validation_succeeded'),
-                    {ok, Message};
-                drop ->
-                    emqx_metrics:inc_global('messages.validation_failed'),
-                    {stop, Message#message{headers = Headers#{allow_publish => false}}};
-                disconnect ->
-                    emqx_metrics:inc_global('messages.validation_failed'),
-                    {stop, Message#message{
-                        headers = Headers#{
-                            allow_publish => false,
-                            should_disconnect => true
-                        }
-                    }}
-            end
+    case check_topic_tree(Message) of
+        ok ->
+            %% Topic tree passed (or no tree loaded); proceed with existing validations
+            case emqx_schema_validation_registry:matching_validations(Topic) of
+                [] ->
+                    ok;
+                Validations ->
+                    case run_validations(Validations, Message) of
+                        ok ->
+                            emqx_metrics:inc_global('messages.validation_succeeded'),
+                            {ok, Message};
+                        drop ->
+                            emqx_metrics:inc_global('messages.validation_failed'),
+                            {stop, Message#message{headers = Headers#{allow_publish => false}}};
+                        disconnect ->
+                            emqx_metrics:inc_global('messages.validation_failed'),
+                            {stop, Message#message{
+                                headers = Headers#{
+                                    allow_publish => false,
+                                    should_disconnect => true
+                                }
+                            }}
+                    end
+            end;
+        {stop, drop} ->
+            emqx_metrics:inc_global('messages.validation_failed'),
+            {stop, Message#message{headers = Headers#{allow_publish => false}}};
+        {stop, disconnect} ->
+            emqx_metrics:inc_global('messages.validation_failed'),
+            {stop, Message#message{
+                headers = Headers#{
+                    allow_publish => false,
+                    should_disconnect => true
+                }
+            }}
     end.
 
 %%------------------------------------------------------------------------------
@@ -306,3 +334,34 @@ run_schema_validation_failed_hook(Message, Validation) ->
     #{name := Name} = Validation,
     ValidationContext = #{name => Name},
     emqx_hooks:run('schema.validation_failed', [Message, ValidationContext]).
+
+%%------------------------------------------------------------------------------
+%% Topic tree validation
+%%------------------------------------------------------------------------------
+
+check_topic_tree(Message) ->
+    case emqx_schema_validation_config:get_topic_tree() of
+        undefined ->
+            %% No tree loaded — fail-open, allow all
+            ok;
+        Model ->
+            #{on_mismatch := OnMismatch} = Model,
+            case emqx_schema_validation_topic_tree:validate(Model, Message) of
+                ok ->
+                    ok;
+                {error, ErrorType, Reason} ->
+                    handle_topic_tree_failure(OnMismatch, ErrorType, Reason, Message)
+            end
+    end.
+
+handle_topic_tree_failure(log_only, ErrorType, Reason, #message{topic = Topic}) ->
+    ?SLOG(warning, #{
+        msg => "topic_tree_validation_failed",
+        topic => Topic,
+        error_type => ErrorType,
+        reason => Reason,
+        action => log_only
+    }),
+    ok;
+handle_topic_tree_failure(Action, _ErrorType, _Reason, _Message) ->
+    {stop, Action}.

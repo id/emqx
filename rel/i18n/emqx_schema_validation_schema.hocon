@@ -102,4 +102,14 @@ config_enable.desc:
 config_enable.label:
 """Enable"""
 
+topic_data_model.desc:
+"""Inline topic data model for topic tree validation. When set, this takes precedence over `topic_data_model_file`. The map should contain `tree`, `variable_types`, `payload_types`, and `settings` keys."""
+topic_data_model.label:
+"""Topic Data Model"""
+
+topic_data_model_file.desc:
+"""Path to a JSON file containing the topic data model for topic tree validation. Used as fallback when `topic_data_model` is not set."""
+topic_data_model_file.label:
+"""Topic Data Model File"""
+
 }

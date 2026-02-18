@@ -33,6 +33,16 @@ roots() ->
 
 fields(schema_validation) ->
     [
+        {topic_data_model,
+            mk(hoconsc:map(name, typerefl:map()), #{
+                desc => ?DESC("topic_data_model"),
+                required => false
+            })},
+        {topic_data_model_file,
+            mk(binary(), #{
+                desc => ?DESC("topic_data_model_file"),
+                required => false
+            })},
         {validations,
             mk(
                 hoconsc:array(ref(validation)),
@@ -186,6 +196,8 @@ checks_refs(_Value) ->
 %% `minirest_trails' API
 %%------------------------------------------------------------------------------
 
+api_schema(topic_data_model) ->
+    hoconsc:map(name, typerefl:map());
 api_schema(list) ->
     hoconsc:array(ref(validation));
 api_schema(lookup) ->

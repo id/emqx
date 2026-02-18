@@ -23,6 +23,7 @@
 -export([
     '/schema_validations'/2,
     '/schema_validations/reorder'/2,
+    '/schema_validations/topic_data_model'/2,
     '/schema_validations/validation/:name'/2,
     '/schema_validations/validation/:name/metrics'/2,
     '/schema_validations/validation/:name/metrics/reset'/2,
@@ -49,6 +50,7 @@ paths() ->
     [
         "/schema_validations",
         "/schema_validations/reorder",
+        "/schema_validations/topic_data_model",
         "/schema_validations/validation/:name",
         "/schema_validations/validation/:name/metrics",
         "/schema_validations/validation/:name/metrics/reset",
@@ -134,6 +136,46 @@ schema("/schema_validations/reorder") ->
                                 mk(array(binary()), #{desc => ?DESC("duplicated_validations")})}
                         ]
                     )
+                }
+        }
+    };
+schema("/schema_validations/topic_data_model") ->
+    #{
+        'operationId' => '/schema_validations/topic_data_model',
+        get => #{
+            tags => ?TAGS,
+            description => ?DESC("get_topic_data_model"),
+            responses =>
+                #{
+                    200 => emqx_dashboard_swagger:schema_with_examples(
+                        emqx_schema_validation_schema:api_schema(topic_data_model),
+                        example_topic_data_model()
+                    ),
+                    404 => error_schema('NOT_FOUND', ?DESC("topic_data_model_not_found"))
+                }
+        },
+        put => #{
+            tags => ?TAGS,
+            description => ?DESC("update_topic_data_model"),
+            'requestBody' => emqx_dashboard_swagger:schema_with_examples(
+                emqx_schema_validation_schema:api_schema(topic_data_model),
+                example_topic_data_model()
+            ),
+            responses =>
+                #{
+                    200 => emqx_dashboard_swagger:schema_with_examples(
+                        emqx_schema_validation_schema:api_schema(topic_data_model),
+                        example_topic_data_model()
+                    ),
+                    400 => error_schema('BAD_REQUEST', ?DESC("bad_params"))
+                }
+        },
+        delete => #{
+            tags => ?TAGS,
+            description => ?DESC("delete_topic_data_model"),
+            responses =>
+                #{
+                    204 => ?DESC("no_content")
                 }
         }
     };
@@ -331,6 +373,30 @@ fields(node_metrics) ->
 '/schema_validations/reorder'(post, #{body := #{<<"order">> := Order}}) ->
     do_reorder(Order).
 
+'/schema_validations/topic_data_model'(get, _Params) ->
+    case emqx_schema_validation:get_topic_data_model() of
+        undefined ->
+            ?NOT_FOUND(<<"Topic data model not configured">>);
+        DataModel when map_size(DataModel) =:= 0 ->
+            ?NOT_FOUND(<<"Topic data model not configured">>);
+        DataModel ->
+            ?OK(DataModel)
+    end;
+'/schema_validations/topic_data_model'(put, #{body := Body}) ->
+    case emqx_schema_validation:update_topic_data_model(Body) of
+        {ok, _} ->
+            ?OK(Body);
+        {error, Reason} ->
+            ?BAD_REQUEST(Reason)
+    end;
+'/schema_validations/topic_data_model'(delete, _Params) ->
+    case emqx_schema_validation:delete_topic_data_model() of
+        {ok, _} ->
+            ?NO_CONTENT;
+        {error, Reason} ->
+            ?BAD_REQUEST(Reason)
+    end.
+
 '/schema_validations/validation/:name/enable/:enable'(post, #{
     bindings := #{name := Name, enable := Enable}
 }) ->
@@ -468,6 +534,44 @@ example_return_metrics() ->
                                 metrics => Metrics
                             }
                         ]
+                }
+            }
+    }.
+
+example_topic_data_model() ->
+    #{
+        <<"topic_data_model">> =>
+            #{
+                summary => ?DESC("example_topic_data_model"),
+                value => #{
+                    <<"tree">> => #{
+                        <<"devices">> => #{
+                            <<"_type">> => <<"namespace">>,
+                            <<"_description">> => <<"Device messages">>,
+                            <<"children">> => #{
+                                <<"{device_id}">> => #{
+                                    <<"_type">> => <<"variable">>,
+                                    <<"_description">> => <<"Device identifier">>,
+                                    <<"_var_type">> => <<"device_id">>,
+                                    <<"children">> => #{
+                                        <<"telemetry">> => #{
+                                            <<"_type">> => <<"endpoint">>,
+                                            <<"_description">> => <<"Telemetry data">>
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    <<"variable_types">> => #{
+                        <<"device_id">> => #{
+                            <<"type">> => <<"string">>,
+                            <<"pattern">> => <<"^[a-zA-Z0-9_-]+$">>
+                        }
+                    },
+                    <<"settings">> => #{
+                        <<"on_mismatch">> => <<"drop">>
+                    }
                 }
             }
     }.
